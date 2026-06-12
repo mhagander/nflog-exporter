@@ -36,7 +36,7 @@ func TestParseLabels(t *testing.T) {
 
 func TestObserveExposesSelectedLabels(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	c, err := New(reg, []string{LabelProto, LabelDstPort}, "", "test", "go-test")
+	c, err := New(reg, []string{LabelProto, LabelDstPort}, "", Metrics{Packets: true, Bytes: true}, "test", "go-test")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -71,7 +71,7 @@ nflog_bytes_total{dst_port="1234",proto="tcp"} 200
 
 func TestSubsystemRenamesTrafficCounters(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	c, err := New(reg, []string{LabelDstPort}, "dropped", "test", "go-test")
+	c, err := New(reg, []string{LabelDstPort}, "dropped", Metrics{Packets: true, Bytes: true}, "test", "go-test")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -99,6 +99,51 @@ nflog_received_packets_total{group="5"} 1
 	}
 }
 
+func TestParseMetrics(t *testing.T) {
+	cases := map[string]Metrics{
+		"packets,bytes": {Packets: true, Bytes: true},
+		"packets":       {Packets: true},
+		"bytes":         {Bytes: true},
+		"bytes,packets": {Packets: true, Bytes: true},
+	}
+	for spec, want := range cases {
+		got, err := ParseMetrics(spec)
+		if err != nil {
+			t.Errorf("ParseMetrics(%q): %v", spec, err)
+		} else if got != want {
+			t.Errorf("ParseMetrics(%q) = %+v, want %+v", spec, got, want)
+		}
+	}
+	for _, bad := range []string{"", "nope", "packets,nope"} {
+		if _, err := ParseMetrics(bad); err == nil {
+			t.Errorf("ParseMetrics(%q) = nil error, want error", bad)
+		}
+	}
+}
+
+func TestMetricsSelectionExportsOnlyChosen(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	c, err := New(reg, []string{LabelDstPort}, "", Metrics{Packets: true}, "test", "go-test")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	c.Observe(5, "", 0, 0, packet.Info{Proto: "tcp", DstPort: 1234, HasPorts: true, WireLen: 100})
+
+	if n := testutil.CollectAndCount(c.packets); n != 1 {
+		t.Errorf("packets series = %d, want 1", n)
+	}
+	// Bytes counter was not created and must not appear in the registry.
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if strings.Contains(mf.GetName(), "bytes_total") {
+			t.Errorf("bytes_total should not be exported when only packets selected; found %q", mf.GetName())
+		}
+	}
+}
+
 func TestValidateSubsystem(t *testing.T) {
 	for _, ok := range []string{"", "dropped", "fw_drops", "X1"} {
 		if err := ValidateSubsystem(ok); err != nil {
@@ -114,7 +159,7 @@ func TestValidateSubsystem(t *testing.T) {
 
 func TestReceivedAndDecodeErrorCounters(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	c, err := New(reg, []string{LabelProto}, "", "test", "go-test")
+	c, err := New(reg, []string{LabelProto}, "", Metrics{Packets: true, Bytes: true}, "test", "go-test")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

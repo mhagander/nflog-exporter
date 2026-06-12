@@ -97,6 +97,44 @@ func ParseLabels(spec string) ([]string, error) {
 	return out, nil
 }
 
+// Metric tokens accepted by --metrics.
+const (
+	MetricPackets = "packets"
+	MetricBytes   = "bytes"
+)
+
+// Metrics selects which traffic counters are exported. At least one is always
+// enabled.
+type Metrics struct {
+	Packets bool
+	Bytes   bool
+}
+
+// AllowedMetrics returns the valid --metrics tokens (for help text).
+func AllowedMetrics() []string { return []string{MetricPackets, MetricBytes} }
+
+// ParseMetrics parses and validates a comma-separated --metrics value.
+func ParseMetrics(spec string) (Metrics, error) {
+	var m Metrics
+	for _, tok := range strings.Split(spec, ",") {
+		tok = strings.TrimSpace(tok)
+		switch tok {
+		case "":
+			continue
+		case MetricPackets:
+			m.Packets = true
+		case MetricBytes:
+			m.Bytes = true
+		default:
+			return Metrics{}, fmt.Errorf("unknown metric %q (allowed: %s)", tok, strings.Join(AllowedMetrics(), ", "))
+		}
+	}
+	if !m.Packets && !m.Bytes {
+		return Metrics{}, fmt.Errorf("at least one metric is required")
+	}
+	return m, nil
+}
+
 // Collector owns all exporter metrics.
 type Collector struct {
 	labels []string // selected per-packet labels, canonical order
@@ -116,7 +154,7 @@ type Collector struct {
 // registers all metrics on reg. subsystem is an optional word inserted into the
 // traffic counter names (e.g. "dropped" -> nflog_dropped_packets_total); the
 // operational metrics are unaffected.
-func New(reg prometheus.Registerer, labels []string, subsystem, version, goVersion string) (*Collector, error) {
+func New(reg prometheus.Registerer, labels []string, subsystem string, metrics Metrics, version, goVersion string) (*Collector, error) {
 	if err := ValidateSubsystem(subsystem); err != nil {
 		return nil, err
 	}
@@ -125,18 +163,22 @@ func New(reg prometheus.Registerer, labels []string, subsystem, version, goVersi
 		ifCache: make(map[uint32]string),
 	}
 
-	c.packets = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricNamespace,
-		Subsystem: subsystem,
-		Name:      "packets_total",
-		Help:      "Total number of packets logged via NFLOG, by the selected labels.",
-	}, labels)
-	c.bytes = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricNamespace,
-		Subsystem: subsystem,
-		Name:      "bytes_total",
-		Help:      "Total on-wire bytes of packets logged via NFLOG, by the selected labels.",
-	}, labels)
+	if metrics.Packets {
+		c.packets = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Subsystem: subsystem,
+			Name:      "packets_total",
+			Help:      "Total number of packets logged via NFLOG, by the selected labels.",
+		}, labels)
+	}
+	if metrics.Bytes {
+		c.bytes = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Subsystem: subsystem,
+			Name:      "bytes_total",
+			Help:      "Total on-wire bytes of packets logged via NFLOG, by the selected labels.",
+		}, labels)
+	}
 	c.received = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "nflog_received_packets_total",
 		Help: "Total NFLOG callbacks received per group, before decoding.",
@@ -150,9 +192,14 @@ func New(reg prometheus.Registerer, labels []string, subsystem, version, goVersi
 		Help: "Build information for nflog_exporter (always 1).",
 	}, []string{"version", "goversion"})
 
-	for _, col := range []prometheus.Collector{
-		c.packets, c.bytes, c.received, c.decodeError, c.buildInfo,
-	} {
+	cols := []prometheus.Collector{c.received, c.decodeError, c.buildInfo}
+	if c.packets != nil {
+		cols = append(cols, c.packets)
+	}
+	if c.bytes != nil {
+		cols = append(cols, c.bytes)
+	}
+	for _, col := range cols {
 		if err := reg.Register(col); err != nil {
 			return nil, err
 		}
@@ -178,8 +225,12 @@ func (c *Collector) Observe(group uint16, prefix string, inIf, outIf uint32, inf
 	for i, l := range c.labels {
 		vals[i] = c.value(l, group, prefix, inIf, outIf, info)
 	}
-	c.packets.WithLabelValues(vals...).Inc()
-	c.bytes.WithLabelValues(vals...).Add(float64(info.WireLen))
+	if c.packets != nil {
+		c.packets.WithLabelValues(vals...).Inc()
+	}
+	if c.bytes != nil {
+		c.bytes.WithLabelValues(vals...).Add(float64(info.WireLen))
+	}
 }
 
 func (c *Collector) value(label string, group uint16, prefix string, inIf, outIf uint32, info packet.Info) string {

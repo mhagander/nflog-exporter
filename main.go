@@ -68,6 +68,7 @@ func main() {
 		groups      groupFlag
 		labelsSpec  = flag.String("labels", "group,proto", "comma-separated metric labels; any of: "+strings.Join(collector.AllowedLabels(), ", "))
 		subsystem   = flag.String("subsystem", "", "optional word inserted into the traffic counter names, e.g. \"dropped\" -> nflog_dropped_packets_total")
+		metricsSpec = flag.String("metrics", "packets,bytes", "comma-separated traffic counters to export; any of: "+strings.Join(collector.AllowedMetrics(), ", "))
 		listenAddr  = flag.String("listen", "127.0.0.1:9712", "address to serve metrics on (use :9712 to listen on all interfaces)")
 		metricsPath = flag.String("metrics-path", "/metrics", "HTTP path for metrics")
 		showVersion = flag.Bool("version", false, "print version and exit")
@@ -93,13 +94,18 @@ func main() {
 		log.Fatalf("--subsystem: %v", err)
 	}
 
+	metrics, err := collector.ParseMetrics(*metricsSpec)
+	if err != nil {
+		log.Fatalf("--metrics: %v", err)
+	}
+
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
 
-	coll, err := collector.New(reg, labels, *subsystem, version, runtime.Version())
+	coll, err := collector.New(reg, labels, *subsystem, metrics, version, runtime.Version())
 	if err != nil {
 		log.Fatalf("register metrics: %v", err)
 	}

@@ -20,7 +20,9 @@ nflog_packets_total{dst_port="1234"}
 | `nflog_bytes_total` | counter | *selected* (`--labels`) | On-wire bytes (from the IP header length, not the captured length). |
 
 The two traffic counters (`*_packets_total`, `*_bytes_total`) can be renamed with
-`--subsystem` (see below). The operational counters below are never renamed.
+`--subsystem` (see below), and `--metrics` selects which of them are exported
+(`--metrics packets`, `--metrics bytes`, or the default `packets,bytes`). The
+operational counters below are always exported and never renamed.
 | `nflog_received_packets_total` | counter | `group` | Callbacks received per group, before decoding. |
 | `nflog_decode_errors_total` | counter | `group` | Packets that could not be decoded. |
 | `nflog_build_info` | gauge | `version`, `goversion` | Always 1. |
@@ -73,6 +75,7 @@ Flags:
 | --- | --- | --- |
 | `--group` | *(required)* | NFLOG group to watch. Repeatable, or comma-separated. |
 | `--labels` | `group,proto` | Metric label dimensions (see above). |
+| `--metrics` | `packets,bytes` | Which traffic counters to export: `packets`, `bytes`, or both. |
 | `--subsystem` | *(empty)* | Word inserted into the traffic counter names (see below). |
 | `--listen` | `127.0.0.1:9712` | Address to serve metrics on (localhost only; use `:9712` for all interfaces). |
 | `--metrics-path` | `/metrics` | HTTP path for metrics. |
